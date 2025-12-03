@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>回测结果可视化 Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      background: #0b1020;
+      color: #f5f5f5;
+    }
+    header {
+      padding: 12px 20px;
+      border-bottom: 1px solid #222842;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: #131933;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .toolbar {
+      margin-left: auto;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-size: 13px;
+    }
+    input[type="file"] {
+      font-size: 12px;
+    }
+    select {
+      background: #1a2140;
+      border-radius: 6px;
+      border: 1px solid #31395d;
+      color: #f5f5f5;
+      padding: 4px 8px;
+      font-size: 13px;
+    }
+    main {
+      padding: 10px 16px 16px;
+      height: calc(100vh - 60px);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .meta {
+      font-size: 12px;
+      color: #a6adc8;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .meta strong { color: #e5e9ff; }
+    .grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      gap: 10px;
+    }
+    .panel {
+      background: #111627;
+      border-radius: 10px;
+      border: 1px solid #222842;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .panel-header {
+      font-size: 13px;
+      color: #cdd1f4;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-header span {
+      opacity: 0.8;
+    }
+    .chart {
+      flex: 1;
+      min-height: 0;
+    }
+    #msg {
+      font-size: 12px;
+      color: #ffcc66;
+      padding-left: 4px;
+    }
+    a.meta-file {
+      color: #8ab4ff;
+      text-decoration: none;
+    }
+    a.meta-file:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>回测结果可视化 Dashboard</h1>
+    <div class="toolbar">
+      <label>
+        选择结果文件（CSV / JSON）：
+        <input id="file-input" type="file" multiple accept=".csv,.json" />
+      </label>
+      <label>
+        当前文件：
+        <select id="file-select">
+          <option value="">未选择</option>
+        </select>
+      </label>
+      <span id="msg"></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="meta" id="meta-info">
+      <span>提示：一次可以选择多份结果文件，然后在右侧下拉框切换查看。</span>
+    </div>
+    <div class="grid">
+      <div class="panel">
+        <div class="panel-header">
+          <div><strong id="left-title">日K & 信号 / 参数散点</strong></div>
+          <span id="left-sub"></span>
+        </div>
+        <div id="chart-left" class="chart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div><strong id="right-title">资金曲线</strong></div>
+          <span id="right-sub"></span>
+        </div>
+        <div id="chart-right" class="chart"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById("file-input");
+    const fileSelect = document.getElementById("file-select");
+    const msgEl = document.getElementById("msg");
+    const metaEl = document.getElementById("meta-info");
+    const leftTitleEl  = document.getElementById("left-title");
+    const leftSubEl    = document.getElementById("left-sub");
+    const rightTitleEl = document.getElementById("right-title");
+    const rightSubEl   = document.getElementById("right-sub");
+
+    const chartLeft  = echarts.init(document.getElementById("chart-left"));
+    const chartRight = echarts.init(document.getElementById("chart-right"));
+
+    // 存放已选文件
+    const fileMap = new Map(); // name -> File
+
+    fileInput.addEventListener("change", () => {
+      fileMap.clear();
+      fileSelect.innerHTML = '<option value="">请选择要查看的文件</option>';
+      msgEl.textContent = "";
+
+      const files = Array.from(fileInput.files || []);
+      if (!files.length) return;
+
+      files.forEach((f) => {
+        fileMap.set(f.name, f);
+        const opt = document.createElement("option");
+        opt.value = f.name;
+        opt.textContent = f.name;
+        fileSelect.appendChild(opt);
+      });
+
+      msgEl.textContent = `已选 ${files.length} 个文件`;
+      if (files.length > 0) {
+        fileSelect.value = files[0].name;
+        loadAndRenderFile(files[0]);
+      }
+    });
+
+    fileSelect.addEventListener("change", () => {
+      const name = fileSelect.value;
+      const f = fileMap.get(name);
+      if (f) {
+        loadAndRenderFile(f);
+      }
+    });
+
+    function loadAndRenderFile(file) {
+      msgEl.textContent = "读取中…";
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = reader.result;
+        const lower = file.name.toLowerCase();
+        try {
+          if (lower.endsWith(".json")) {
+            renderFromJson(text, file.name);
+          } else if (lower.endsWith(".csv")) {
+            renderFromCsv(text, file.name);
+          } else {
+            msgEl.textContent = "只支持 .csv / .json 文件";
+            return;
+          }
+          msgEl.textContent = `已加载：${file.name}`;
+        } catch (e) {
+          console.error(e);
+          msgEl.textContent = "解析文件失败，请检查格式（控制台查看详情）";
+        }
+      };
+      reader.readAsText(file, "utf-8");
+    }
+
+    // ========== CSV 解析 & 渲染 ==========
+
+    function parseCsv(text) {
+      const lines = text.split(/\r?\n/).filter((ln) => ln.trim() && !ln.trim().startsWith("#"));
+      if (!lines.length) return { headers: [], rows: [] };
+      const headers = lines[0].split(",").map((h) => h.trim());
+      const rows = [];
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split(",");
+        if (parts.length !== headers.length) continue;
+        const row = {};
+        headers.forEach((h, idx) => {
+          row[h] = parts[idx];
+        });
+        rows.push(row);
+      }
+      return { headers, rows };
+    }
+
+    function renderFromCsv(text, fileName) {
+      const { headers, rows } = parseCsv(text);
+      if (!rows.length) {
+        chartLeft.clear();
+        chartRight.clear();
+        metaEl.textContent = "CSV 内容为空或只有注释。";
+        return;
+      }
+
+      // 1）如果是 param_table_summary 的结构，画参数散点
+      if (
+        headers.includes("buy_score_thresh") &&
+        headers.includes("sell_score_thresh") &&
+        headers.includes("strategy_total_return")
+      ) {
+        renderParamSummaryCsv(headers, rows, fileName);
+      } else {
+        // 2）否则按“日线+资金曲线”来处理
+        renderDailyBacktestCsv(headers, rows, fileName);
+      }
+    }
+
+    // ----- 参数组合散点图 -----
+    function renderParamSummaryCsv(headers, rows, fileName) {
+      leftTitleEl.textContent  = "参数组合表现（散点图）";
+      rightTitleEl.textContent = "无资金曲线（仅参数表）";
+      rightSubEl.textContent   = "";
+      chartRight.clear();
+
+      const symbols = [...new Set(rows.map((r) => r.symbol || r.SYMBOL || "UNKNOWN"))];
+      const symbol = symbols[0];
+      const data = rows.map((r) => {
+        const buy = parseFloat(r.buy_score_thresh);
+        const sell = parseFloat(r.sell_score_thresh);
+        const ret = parseFloat(r.strategy_total_return) * 100; // 转成百分数
+        return [buy, sell, ret, r.symbol || ""];
+      });
+
+      const optionLeft = {
+        backgroundColor: "transparent",
+        tooltip: {
+          trigger: "item",
+          formatter: (p) => {
+            const d = p.data;
+            return [
+              `symbol: ${d[3] || symbol}`,
+              `buy_score: ${d[0]}`,
+              `sell_score: ${d[1]}`,
+              `total_return: ${d[2].toFixed(2)}%`,
+            ].join("<br/>");
+          },
+        },
+        visualMap: {
+          min: Math.min(...data.map((d) => d[2])),
+          max: Math.max(...data.map((d) => d[2])),
+          orient: "vertical",
+          right: 10,
+          top: "center",
+          text: ["高收益", "低收益"],
+          textStyle: { color: "#cdd1f4", fontSize: 11 },
+          calculable: true,
+          inRange: {
+            color: ["#f15b6c", "#fac858", "#3ba272"], // 红 -> 黄 -> 绿
+          },
+          formatter: (v) => v.toFixed(1) + "%",
+        },
+        xAxis: {
+          type: "value",
+          name: "buy_score_thresh（买入阈值）",
+          nameLocation: "middle",
+          nameGap: 26,
+          axisLine: { lineStyle: { color: "#555b80" } },
+          axisLabel: { color: "#cdd1f4" },
+          splitLine: { lineStyle: { color: "#262b46" } },
+        },
+        yAxis: {
+          type: "value",
+          name: "sell_score_thresh（卖出阈值）",
+          nameLocation: "middle",
+          nameGap: 30,
+          axisLine: { lineStyle: { color: "#555b80" } },
+          axisLabel: { color: "#cdd1f4" },
+          splitLine: { lineStyle: { color: "#262b46" } },
+        },
+        series: [
+          {
+            name: "参数组合",
+            type: "scatter",
+            symbolSize: 10,
+            data: data,
+          },
+        ],
+        grid: { left: 60, right: 60, top: 40, bottom: 50 },
+        title: {
+          text: "参数组合表现（策略总收益）",
+          left: 10,
+          top: 10,
+          textStyle: { color: "#e5e9ff", fontSize: 13 },
+        },
+      };
+
+      chartLeft.setOption(optionLeft, true);
+
+      metaEl.innerHTML =
+        `<span><strong>源文件：</strong>${fileName}</span>` +
+        `<span><strong>标的数量：</strong>${symbols.length}</span>` +
+        `<span><strong>行数：</strong>${rows.length}</span>`;
+    }
+
+    // ----- 日线 + 买卖点 + 资金曲线 -----
+    function renderDailyBacktestCsv(headers, rows, fileName) {
+      leftTitleEl.textContent  = "日K线 & 交易信号";
+      rightTitleEl.textContent = "策略 vs Buy & Hold 资金曲线";
+
+      // 预期字段名（任选其一）
+      const colDate  = headers.includes("date") ? "date" : headers[0];
+      const colOpen  = ["open", "OPEN"].find((c) => headers.includes(c));
+      const colHigh  = ["high", "HIGH"].find((c) => headers.includes(c));
+      const colLow   = ["low", "LOW"].find((c) => headers.includes(c));
+      const colClose = ["close", "CLOSE"].find((c) => headers.includes(c));
+      const colPos   = ["position", "POSITION"].find((c) => headers.includes(c));
+      const colEq    = ["equity", "strategy_equity"].find((c) => headers.includes(c));
+      const colBhEq  = ["bh_equity", "buyhold_equity", "bh_equity_curve"].find((c) =>
+        headers.includes(c)
+      );
+
+      const hasOHLC = colOpen && colHigh && colLow && colClose;
+      const hasEq   = Boolean(colEq);
+
+      const dates = [];
+      const ohlc = [];
+      const buyPoints = [];
+      const sellPoints = [];
+      const stratEq = [];
+      const bhEq = [];
+
+      let prevPos = null;
+
+      rows.forEach((r) => {
+        const d = r[colDate];
+        dates.push(d);
+
+        if (hasOHLC) {
+          const o = parseFloat(r[colOpen]);
+          const h = parseFloat(r[colHigh]);
+          const l = parseFloat(r[colLow]);
+          const c = parseFloat(r[colClose]);
+          ohlc.push([o, c, l, h]);
+
+          if (colPos) {
+            const p = parseInt(r[colPos], 10);
+            if (prevPos === 0 && p === 1) {
+              buyPoints.push([d, c]);
+            } else if (prevPos === 1 && p === 0) {
+              sellPoints.push([d, c]);
+            }
+            prevPos = p;
+          }
+        }
+
+        if (hasEq) {
+          const e = parseFloat(r[colEq]);
+          stratEq.push(e);
+        }
+        if (colBhEq) {
+          const be = parseFloat(r[colBhEq]);
+          if (!Number.isNaN(be)) bhEq.push(be);
+        }
+      });
+
+      // -- 左图：K 线 + 信号（若没有 OHLC，就清空）
+      if (hasOHLC) {
+        const series = [
+          {
+            name: "日K",
+            type: "candlestick",
+            data: ohlc,
+            itemStyle: {
+              color: "#ef5350",
+              color0: "#26a69a",
+              borderColor: "#ef5350",
+              borderColor0: "#26a69a",
+            },
+          },
+        ];
+
+        if (buyPoints.length) {
+          series.push({
+            name: "买入",
+            type: "scatter",
+            data: buyPoints,
+            symbolSize: 8,
+            itemStyle: { color: "#42a5f5" },
+          });
+        }
+
+        if (sellPoints.length) {
+          series.push({
+            name: "卖出",
+            type: "scatter",
+            data: sellPoints,
+            symbolSize: 8,
+            itemStyle: { color: "#ffca28" },
+          });
+        }
+
+        const optionLeft = {
+          backgroundColor: "transparent",
+          legend: {
+            data: series.map((s) => s.name),
+            top: 4,
+            left: 10,
+            textStyle: { color: "#cdd1f4", fontSize: 11 },
+          },
+          tooltip: {
+            trigger: "axis",
+          },
+          xAxis: {
+            type: "category",
+            data: dates,
+            boundaryGap: false,
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+          },
+          yAxis: {
+            scale: true,
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+            splitLine: { lineStyle: { color: "#262b46" } },
+          },
+          dataZoom: [
+            { type: "inside", xAxisIndex: 0 },
+            { type: "slider", xAxisIndex: 0, bottom: 0 },
+          ],
+          grid: { left: 60, right: 20, top: 28, bottom: 40 },
+          series,
+        };
+
+        chartLeft.setOption(optionLeft, true);
+        leftSubEl.textContent = "注：买卖点来自 position 变化（0→1=买，1→0=卖）";
+      } else {
+        chartLeft.clear();
+        leftSubEl.textContent = "当前 CSV 中未检测到 open/high/low/close，无法绘制日K。";
+      }
+
+      // -- 右图：资金曲线
+      if (hasEq) {
+        const seriesRight = [
+          {
+            name: "策略",
+            type: "line",
+            data: stratEq,
+            showSymbol: false,
+            smooth: false,
+          },
+        ];
+        if (bhEq.length === stratEq.length) {
+          seriesRight.push({
+            name: "Buy & Hold",
+            type: "line",
+            data: bhEq,
+            showSymbol: false,
+            smooth: false,
+          });
+        }
+
+        const optionRight = {
+          backgroundColor: "transparent",
+          legend: {
+            data: seriesRight.map((s) => s.name),
+            top: 4,
+            left: 10,
+            textStyle: { color: "#cdd1f4", fontSize: 11 },
+          },
+          tooltip: {
+            trigger: "axis",
+            valueFormatter: (v) => (v != null ? v.toFixed(2) : v),
+          },
+          xAxis: {
+            type: "category",
+            data: dates,
+            boundaryGap: false,
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+          },
+          yAxis: {
+            type: "value",
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+            splitLine: { lineStyle: { color: "#262b46" } },
+          },
+          dataZoom: [
+            { type: "inside", xAxisIndex: 0 },
+            { type: "slider", xAxisIndex: 0, bottom: 0 },
+          ],
+          grid: { left: 60, right: 20, top: 28, bottom: 40 },
+          series: seriesRight,
+        };
+
+        chartRight.setOption(optionRight, true);
+        rightSubEl.textContent = "单位：资金净值（equity）";
+      } else {
+        chartRight.clear();
+        rightSubEl.textContent = "当前 CSV 未检测到 equity 列，无法绘制资金曲线。";
+      }
+
+      metaEl.innerHTML =
+        `<span><strong>源文件：</strong>${fileName}</span>` +
+        `<span><strong>记录条数：</strong>${rows.length}</span>` +
+        `<span><strong>字段：</strong>${headers.join(", ")}</span>`;
+    }
+
+    // ========== JSON（单票回测结果） ==========
+    function renderFromJson(text, fileName) {
+      const obj = JSON.parse(text);
+
+      const eqStrategy = (obj.equity_curve && obj.equity_curve.strategy) || [];
+      const eqBh = (obj.equity_curve && obj.equity_curve.buy_and_hold) || [];
+
+      const dates = eqStrategy.map((d) => d.date);
+      const stratEq = eqStrategy.map((d) => d.equity);
+      const bhEq = eqBh.map((d) => d.equity);
+
+      // 右：资金曲线
+      if (dates.length && stratEq.length) {
+        const seriesRight = [
+          {
+            name: "策略",
+            type: "line",
+            data: stratEq,
+            showSymbol: false,
+          },
+        ];
+        if (bhEq.length === stratEq.length) {
+          seriesRight.push({
+            name: "Buy & Hold",
+            type: "line",
+            data: bhEq,
+            showSymbol: false,
+          });
+        }
+
+        const optionRight = {
+          backgroundColor: "transparent",
+          legend: {
+            data: seriesRight.map((s) => s.name),
+            top: 4,
+            left: 10,
+            textStyle: { color: "#cdd1f4", fontSize: 11 },
+          },
+          tooltip: {
+            trigger: "axis",
+            valueFormatter: (v) => (v != null ? v.toFixed(2) : v),
+          },
+          xAxis: {
+            type: "category",
+            data: dates,
+            boundaryGap: false,
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+          },
+          yAxis: {
+            type: "value",
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+            splitLine: { lineStyle: { color: "#262b46" } },
+          },
+          dataZoom: [
+            { type: "inside", xAxisIndex: 0 },
+            { type: "slider", xAxisIndex: 0, bottom: 0 },
+          ],
+          grid: { left: 60, right: 20, top: 28, bottom: 40 },
+          series: seriesRight,
+        };
+
+        chartRight.setOption(optionRight, true);
+        rightTitleEl.textContent = "策略 vs Buy & Hold 资金曲线（from JSON）";
+        rightSubEl.textContent = "";
+      } else {
+        chartRight.clear();
+        rightSubEl.textContent = "JSON 中未找到 equity_curve.strategy 数据。";
+      }
+
+      // 左边暂时没有 K 线数据，只给一个占位说明
+      chartLeft.clear();
+      leftTitleEl.textContent = "当前 JSON 不含 K 线，只展示资金曲线";
+      leftSubEl.textContent = "";
+
+      const meta = obj.meta || {};
+      const perf = obj.performance || {};
+
+      metaEl.innerHTML =
+        `<span><strong>源文件：</strong>${fileName}</span>` +
+        `<span><strong>标的：</strong>${meta.symbol || ""} ${meta.symbol_name || ""}</span>` +
+        `<span><strong>回测区间：</strong>${meta.start_date || "?"} ~ ${meta.end_date || "?"}</span>` +
+        `<span><strong>初始资金：</strong>${meta.initial_cash || ""}</span>`;
+    }
+
+    window.addEventListener("resize", () => {
+      chartLeft.resize();
+      chartRight.resize();
+    });
+  </script>
+</body>
+</html>

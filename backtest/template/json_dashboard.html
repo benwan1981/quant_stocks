@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>单票回测 JSON Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      background: #0b1020;
+      color: #f5f5f5;
+    }
+    header {
+      padding: 10px 16px;
+      background: #141a33;
+      border-bottom: 1px solid #232a46;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+    .toolbar {
+      margin-left: auto;
+      font-size: 13px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    input[type="file"] { font-size: 12px; }
+    select {
+      background: #1a2140;
+      border-radius: 6px;
+      border: 1px solid #31395d;
+      color: #f5f5f5;
+      padding: 4px 8px;
+      font-size: 13px;
+    }
+    #msg { font-size: 12px; color: #ffcc66; }
+
+    main {
+      padding: 10px 16px 16px;
+      height: calc(100vh - 52px);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .meta {
+      font-size: 12px;
+      color: #a6adc8;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .meta strong { color: #e5e9ff; }
+
+    .grid {
+      flex: 1;
+      display: grid;
+      grid-template-rows: 1.3fr 1fr;
+      gap: 10px;
+    }
+    .panel {
+      background: #111627;
+      border-radius: 10px;
+      border: 1px solid #222842;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .panel-header {
+      font-size: 13px;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      color: #cdd1f4;
+    }
+    .chart {
+      flex: 1;
+      min-height: 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>单票回测 JSON Dashboard</h1>
+    <div class="toolbar">
+      <label>
+        选择 JSON 文件：
+        <input id="file-input" type="file" multiple />
+      </label>
+      <label>
+        当前：
+        <select id="file-select">
+          <option value="">未选择</option>
+        </select>
+      </label>
+      <span id="msg"></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="meta" id="meta-info">
+      <span>提示：请直接选择 <code>save_backtest_report_to_json</code> 生成的 JSON 文件。</span>
+    </div>
+    <div class="grid">
+      <div class="panel">
+        <div class="panel-header">
+          <span><strong>资金曲线</strong></span>
+          <span id="curve-sub"></span>
+        </div>
+        <div id="chart-equity" class="chart"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span><strong>年度收益对比</strong></span>
+          <span id="year-sub"></span>
+        </div>
+        <div id="chart-year" class="chart"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById("file-input");
+    const fileSelect = document.getElementById("file-select");
+    const msgEl = document.getElementById("msg");
+    const metaEl = document.getElementById("meta-info");
+    const curveSubEl = document.getElementById("curve-sub");
+    const yearSubEl = document.getElementById("year-sub");
+
+    const chartEquity = echarts.init(document.getElementById("chart-equity"));
+    const chartYear   = echarts.init(document.getElementById("chart-year"));
+
+    const fileMap = new Map(); // name -> File
+
+    fileInput.addEventListener("change", () => {
+      fileMap.clear();
+      fileSelect.innerHTML = '<option value="">未选择</option>';
+      const files = Array.from(fileInput.files || []);
+      if (!files.length) return;
+
+      files.forEach((f) => {
+        fileMap.set(f.name, f);
+        const opt = document.createElement("option");
+        opt.value = f.name;
+        opt.textContent = f.name;
+        fileSelect.appendChild(opt);
+      });
+
+      fileSelect.value = files[0].name;
+      loadJson(files[0]);
+      msgEl.textContent = `已选 ${files.length} 个 JSON`;
+    });
+
+    fileSelect.addEventListener("change", () => {
+      const f = fileMap.get(fileSelect.value);
+      if (f) loadJson(f);
+    });
+
+    function loadJson(file) {
+      msgEl.textContent = "读取中…";
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const obj = JSON.parse(reader.result);
+          renderJson(obj, file.name);
+          msgEl.textContent = `已加载：${file.name}`;
+        } catch (e) {
+          console.error(e);
+          msgEl.textContent = "解析 JSON 失败";
+        }
+      };
+      reader.readAsText(file, "utf-8");
+    }
+
+    function renderJson(obj, fileName) {
+      const meta = obj.meta || {};
+      const perf = obj.performance || {};
+      const stratPerf = perf.strategy || {};
+      const bhPerf    = perf.buy_and_hold || {};
+
+      const eqStrategy = (obj.equity_curve && obj.equity_curve.strategy) || [];
+      const eqBh       = (obj.equity_curve && obj.equity_curve.buy_and_hold) || [];
+
+      const dates = eqStrategy.map((d) => d.date);
+      const stratEq = eqStrategy.map((d) => d.equity);
+      const bhEq    = eqBh.map((d) => d.equity);
+
+      // ===== 资金曲线 =====
+      if (dates.length && stratEq.length) {
+        const series = [
+          {
+            name: "策略",
+            type: "line",
+            data: stratEq,
+            showSymbol: false,
+          },
+        ];
+        if (bhEq.length === stratEq.length) {
+          series.push({
+            name: "Buy & Hold",
+            type: "line",
+            data: bhEq,
+            showSymbol: false,
+          });
+        }
+        const optionEquity = {
+          backgroundColor: "transparent",
+          legend: {
+            data: series.map((s) => s.name),
+            top: 4,
+            left: 10,
+            textStyle: { color: "#cdd1f4", fontSize: 11 },
+          },
+          tooltip: {
+            trigger: "axis",
+            valueFormatter: (v) => (v != null ? v.toFixed(2) : v),
+          },
+          xAxis: {
+            type: "category",
+            data: dates,
+            boundaryGap: false,
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+          },
+          yAxis: {
+            type: "value",
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+            splitLine: { lineStyle: { color: "#262b46" } },
+          },
+          dataZoom: [
+            { type: "inside", xAxisIndex: 0 },
+            { type: "slider", xAxisIndex: 0, bottom: 0 },
+          ],
+          grid: { left: 60, right: 20, top: 28, bottom: 40 },
+          series,
+        };
+        chartEquity.setOption(optionEquity, true);
+        curveSubEl.textContent = "单位：资金净值（equity）";
+      } else {
+        chartEquity.clear();
+        curveSubEl.textContent = "JSON 中未找到 equity_curve.strategy";
+      }
+
+      // ===== 年度收益对比 =====
+      const years = Object.keys(stratPerf)
+        .filter((y) => stratPerf[y] && typeof stratPerf[y].return !== "undefined")
+        .sort();
+
+      const stratRet = years.map((y) => (stratPerf[y].return || 0) * 100);
+      const bhRet    = years.map((y) =>
+        bhPerf[y] && typeof bhPerf[y].return !== "undefined"
+          ? bhPerf[y].return * 100
+          : 0
+      );
+
+      if (years.length) {
+        const optionYear = {
+          backgroundColor: "transparent",
+          tooltip: {
+            trigger: "axis",
+            valueFormatter: (v) => (v != null ? v.toFixed(2) + "%" : v),
+          },
+          legend: {
+            data: ["策略收益", "Buy & Hold"],
+            top: 4,
+            left: 10,
+            textStyle: { color: "#cdd1f4", fontSize: 11 },
+          },
+          xAxis: {
+            type: "category",
+            data: years,
+            axisLine: { lineStyle: { color: "#555b80" } },
+            axisLabel: { color: "#cdd1f4" },
+          },
+          yAxis: {
+            type: "value",
+            axisLabel: {
+              color: "#cdd1f4",
+              formatter: (v) => v + "%",
+            },
+            axisLine: { lineStyle: { color: "#555b80" } },
+            splitLine: { lineStyle: { color: "#262b46" } },
+          },
+          grid: { left: 60, right: 20, top: 28, bottom: 40 },
+          series: [
+            {
+              name: "策略收益",
+              type: "bar",
+              data: stratRet,
+            },
+            {
+              name: "Buy & Hold",
+              type: "bar",
+              data: bhRet,
+            },
+          ],
+        };
+        chartYear.setOption(optionYear, true);
+        yearSubEl.textContent = "单位：年度收益率（%）";
+      } else {
+        chartYear.clear();
+        yearSubEl.textContent = "JSON 中未找到年度收益 performance.strategy";
+      }
+
+      // ===== meta 信息 =====
+      metaEl.innerHTML =
+        `<span><strong>源文件：</strong>${fileName}</span>` +
+        `<span><strong>标的：</strong>${meta.symbol || ""} ${meta.symbol_name || ""}</span>` +
+        `<span><strong>回测区间：</strong>${meta.start_date || "?"} ~ ${meta.end_date || "?"}</span>` +
+        `<span><strong>初始资金：</strong>${meta.initial_cash || ""}</span>` +
+        (meta.benchmark
+          ? `<span><strong>基准：</strong>${meta.benchmark}</span>`
+          : "");
+    }
+
+    window.addEventListener("resize", () => {
+      chartEquity.resize();
+      chartYear.resize();
+    });
+  </script>
+</body>
+</html>

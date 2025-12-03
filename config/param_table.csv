@@ -1,0 +1,34 @@
+# 参数表：每一行代表一个“标的 + 参数组合”
+# 列说明：
+# symbol_code       股票代码（不带市场），例如 600383
+# symbol_market     市场：SH=上交所，SZ=深交所
+# data_file         对应的数据文件路径（你的掘金日线 CSV）
+# backtest_start    回测开始日期（YYYY-MM-DD），留空则用全历史起点
+# backtest_end      回测结束日期（YYYY-MM-DD），留空则用全历史终点
+# use_policy        是否使用政策因子：1=使用，0=不使用
+# buy_score_thresh  开仓阈值：total_score >= 此值 时允许开仓
+# sell_score_thresh 平仓阈值：total_score <= 此值 且满足持有天数时平仓
+# min_hold_days     最小持有天数（避免频繁进出）
+# w_trend           趋势因子权重（0=关闭该因子）
+# w_mom             动量因子权重（0=关闭该因子）
+# w_vol             成交量因子权重（0=关闭该因子）
+# w_risk            风险因子权重（0=关闭该因子）
+# w_tech            技术形态因子权重（0=关闭该因子）
+# w_policy          政策因子权重（0=关闭政策因子）
+
+symbol_code,symbol_market,data_file,backtest_start,backtest_end,use_policy,buy_score_thresh,sell_score_thresh,min_hold_days,w_trend,w_mom,w_vol,w_risk,w_tech,w_policy
+# 金地集团：玩 3 个买入阈值 × 3 个卖出阈值
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,0,3.6,3.8,3,1,1,1,1,1,1
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,0,3.6,4.0,3,1,1,1,1,1,1
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,0,3.6,4.2,3,1,1,1,1,1,1
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,0,3.8,3.8,3,1,1,1,1,1,1
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,0,3.8,4.0,3,1,1,1,1,1,1
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,0,3.8,4.2,3,1,1,1,1,1,1
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,0,4.0,3.8,3,1,1,1,1,1,1
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,0,4.0,4.0,3,1,1,1,1,1,1
+600383,SH,./data/gm_equity/600941_中国移动_D_qfq_gm.csv,2024-10-01,None,1,3.8,4.0,3,1,1,1,1,1,2
+# 其它票先保留一个基准组合
+601111,SH,./data/gm/601111_中国国航_D_gm.csv,2024-10-01,None,0,3.8,4.0,3,1,1,1,1,1,1
+600519,SH,./data/gm/600519_贵州茅台_D_gm.csv,2024-10-01,None,0,3.8,4.0,3,1,1,1,1,1,1
+300750,SZ,./data/gm/300750_宁德时代_D_gm.csv,2024-10-01,None,0,3.8,4.0,3,1,1,1,1,1,1
+601138,SH,./data/gm/601138_工业富联_D_gm.csv,2024-10-01,None,0,3.8,4.0,3,1,1,1,1,1,1

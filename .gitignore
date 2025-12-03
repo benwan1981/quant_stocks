@@ -1,0 +1,37 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual env
+.venv/
+venv/
+env/
+*.egg-info/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (量化大文件，不传仓库)
+data/
+download_cache/
+tmp/
+backtest/results/
+backtest/plots/
+
+# 本地私有配置（含 GM_TOKEN）
+config/config_local.py
+
+# 其他你不想传的
+*.bak
