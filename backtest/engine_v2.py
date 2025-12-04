@@ -9,7 +9,7 @@ BacktestEngineV2：
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Literal
 
 import numpy as np
@@ -50,11 +50,11 @@ class DDGateConfig:
 
 @dataclass
 class StrategyConfigV2:
-    factor_windows: FactorWindows = FactorWindows()
+    factor_windows: FactorWindows = field(default_factory=FactorWindows)
     regime_params: dict[RegimeType, RegimeConfig] = None
-    vol_regime_params: VolRegimeParams = VolRegimeParams()
-    vol_config: VolConfig = VolConfig()
-    dd_gate: DDGateConfig = DDGateConfig()
+    vol_regime_params: VolRegimeParams = field(default_factory=VolRegimeParams)
+    vol_config: VolConfig = field(default_factory=VolConfig)
+    dd_gate: DDGateConfig = field(default_factory=DDGateConfig)
     kelly_lambda: float = 0.45
 
     def __post_init__(self):
@@ -116,6 +116,7 @@ class BacktestEngineV2:
         all_dates = sorted(set(reg_df.index).intersection(*[df.index for df in scores.values()]))
         codes = list(self.stock_universe.keys())
         tw = pd.DataFrame(index=all_dates, columns=codes, dtype=float)
+        meta_rows: list[dict] = []
 
         equity_dummy = pd.Series(1.0, index=all_dates)
         dd_gate = _soft_dd_gate(equity_dummy, self.cfg.dd_gate)
@@ -168,14 +169,63 @@ class BacktestEngineV2:
             for code in candidates.index:
                 tw.at[dt, code] = w[code]
 
+            meta_rows.append(
+                {
+                    "date": dt,
+                    "regime": regime_str,
+                    "vol_z": vol_z,
+                    "buy_th": buy_th,
+                    "sell_th": sell_th,
+                    "target_exposure": target_exposure,
+                    "gate": gate,
+                    "num_candidates": len(candidates),
+                }
+            )
+
         tw = tw.fillna(0.0)
+        self.target_meta_df = pd.DataFrame(meta_rows).set_index("date") if meta_rows else pd.DataFrame()
         return tw
 
     def run_backtest(self, exec_cfg: ExecutionConfig | None = None) -> pd.DataFrame:
         target_weights = self.build_target_weights()
-        eq = run_execution_t1_equal_weight(
+        exec_result = run_execution_t1_equal_weight(
             price_panel=self.stock_universe,
             target_weights=target_weights,
             cfg=exec_cfg,
+            collect_debug=True,
         )
+
+        if isinstance(exec_result, tuple):
+            eq, trades_df, exec_debug_df = exec_result
+        else:
+            eq = exec_result
+            trades_df = pd.DataFrame()
+            exec_debug_df = pd.DataFrame()
+
+        # 计算 drawdown
+        dd_series = eq["equity"] / eq["equity"].cummax() - 1.0
+        eq["dd"] = dd_series
+
+        meta_df = getattr(self, "target_meta_df", pd.DataFrame())
+        debug_df = pd.DataFrame()
+        if not meta_df.empty:
+            meta_df = meta_df.sort_index()
+            if len(meta_df.index) > 1:
+                meta_shift = meta_df.iloc[:-1].copy()
+                meta_shift.index = meta_df.index[1:]
+                debug_df = meta_shift
+        if not exec_debug_df.empty:
+            exec_debug_df = exec_debug_df.sort_index()
+            if debug_df.empty:
+                debug_df = exec_debug_df
+            else:
+                debug_df = debug_df.join(exec_debug_df, how="outer")
+        if not debug_df.empty:
+            debug_df["dd"] = dd_series.reindex(debug_df.index)
+            debug_df["actual_exposure"] = debug_df.get("actual_exposure", pd.Series(index=debug_df.index))
+            debug_df["num_positions"] = debug_df.get("num_positions", pd.Series(index=debug_df.index))
+            debug_df["mode"] = debug_df.get("regime", pd.Series(index=debug_df.index))
+
+        self.debug_df = debug_df.sort_index()
+        self.trades_df = trades_df
         return eq

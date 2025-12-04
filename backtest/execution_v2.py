@@ -25,7 +25,8 @@ def run_execution_t1_equal_weight(
     price_panel: Dict[str, pd.DataFrame],
     target_weights: pd.DataFrame,
     cfg: ExecutionConfig | None = None,
-) -> pd.DataFrame:
+    collect_debug: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     price_panel: {code: df}，df 至少包含 ["open", "close"]，index 为日期
     target_weights: DataFrame，index 为日期，列为 code，值为当日目标权重（0~1）
@@ -42,6 +43,8 @@ def run_execution_t1_equal_weight(
     shares = {code: 0.0 for code in codes}
     cash = cfg.initial_cash
     records = []
+    exec_debug: list[dict] = []
+    trades: list[dict] = []
 
     for i in range(len(all_dates) - 1):
         t = all_dates[i]
@@ -59,6 +62,7 @@ def run_execution_t1_equal_weight(
         equity_t = cash + mv
 
         target_mv = w_t * equity_t
+        target_exposure = float(w_t.fillna(0.0).abs().sum())
 
         cash_t1 = cash
         for code in codes:
@@ -83,6 +87,18 @@ def run_execution_t1_equal_weight(
                 fee = proceeds * cfg.fee_rate
                 cash_t1 += proceeds - fee
                 shares[code] -= sell_shares
+                if collect_debug and sell_shares > 0:
+                    trades.append(
+                        {
+                            "date": t_next,
+                            "code": code,
+                            "action": "SELL",
+                            "shares": float(sell_shares),
+                            "price": float(open_next),
+                            "amount": float(proceeds),
+                            "fee": float(fee),
+                        }
+                    )
             else:
                 buy_mv = diff_mv
                 buy_shares = buy_mv / (open_next * (1 + cfg.slippage))
@@ -97,6 +113,18 @@ def run_execution_t1_equal_weight(
                     total_cost = cost + fee
                 cash_t1 -= total_cost
                 shares[code] += buy_shares
+                if collect_debug and buy_shares > 0:
+                    trades.append(
+                        {
+                            "date": t_next,
+                            "code": code,
+                            "action": "BUY",
+                            "shares": float(buy_shares),
+                            "price": float(open_next),
+                            "amount": float(total_cost),
+                            "fee": float(fee),
+                        }
+                    )
 
         cash = cash_t1
 
@@ -118,6 +146,25 @@ def run_execution_t1_equal_weight(
             }
         )
 
+        if collect_debug:
+            actual_exposure = 0.0
+            if equity_t1 > 0:
+                actual_exposure = mv_t1 / equity_t1
+            num_positions = sum(1 for s in shares.values() if s > 1e-8)
+            exec_debug.append(
+                {
+                    "date": t_next,
+                    "target_exposure_exec": target_exposure,
+                    "actual_exposure": actual_exposure,
+                    "num_positions": num_positions,
+                }
+            )
+
     eq = pd.DataFrame(records).set_index("date")
     eq["ret"] = eq["equity"].pct_change().fillna(0.0)
-    return eq
+    if not collect_debug:
+        return eq
+
+    trades_df = pd.DataFrame(trades)
+    exec_debug_df = pd.DataFrame(exec_debug).set_index("date") if exec_debug else pd.DataFrame()
+    return eq, trades_df, exec_debug_df
