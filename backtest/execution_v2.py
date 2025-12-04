@@ -1,0 +1,123 @@
+# -*- coding: utf-8 -*-
+"""
+多标的 T+1 执行引擎（简化版）：
+- 先卖后买
+- 每日根据 target_weight_t，在 t+1 日开盘成交
+- 不做整手约束（后续你可以加 floor(/100)*100）
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict
+
+import pandas as pd
+
+
+@dataclass
+class ExecutionConfig:
+    initial_cash: float = 1_000_000.0
+    fee_rate: float = 0.0005
+    slippage: float = 0.0005
+
+
+def run_execution_t1_equal_weight(
+    price_panel: Dict[str, pd.DataFrame],
+    target_weights: pd.DataFrame,
+    cfg: ExecutionConfig | None = None,
+) -> pd.DataFrame:
+    """
+    price_panel: {code: df}，df 至少包含 ["open", "close"]，index 为日期
+    target_weights: DataFrame，index 为日期，列为 code，值为当日目标权重（0~1）
+                    约定：在 t 日给出的权重，在 t+1 日开盘成交。
+    返回：资金曲线 DataFrame（index 为日期）：
+      - equity, cash, market_value, ret
+    """
+    if cfg is None:
+        cfg = ExecutionConfig()
+
+    all_dates = sorted(target_weights.index)
+    codes = list(price_panel.keys())
+
+    shares = {code: 0.0 for code in codes}
+    cash = cfg.initial_cash
+    records = []
+
+    for i in range(len(all_dates) - 1):
+        t = all_dates[i]
+        t_next = all_dates[i + 1]
+
+        w_t = target_weights.loc[t].fillna(0.0)
+
+        mv = 0.0
+        for code in codes:
+            dfp = price_panel[code]
+            if t not in dfp.index:
+                continue
+            close_t = dfp.at[t, "close"]
+            mv += shares[code] * close_t
+        equity_t = cash + mv
+
+        target_mv = w_t * equity_t
+
+        cash_t1 = cash
+        for code in codes:
+            dfp = price_panel[code]
+            if t_next not in dfp.index:
+                continue
+            open_next = dfp.at[t_next, "open"]
+
+            cur_shares = shares[code]
+            cur_mv_t = cur_shares * open_next
+            tgt_mv_t = target_mv.get(code, 0.0)
+            diff_mv = tgt_mv_t - cur_mv_t
+
+            if abs(diff_mv) < 1e-8:
+                continue
+
+            if diff_mv < 0:
+                sell_mv = -diff_mv
+                sell_shares = sell_mv / (open_next * (1 + cfg.slippage))
+                sell_shares = min(sell_shares, cur_shares)
+                proceeds = sell_shares * open_next * (1 - cfg.slippage)
+                fee = proceeds * cfg.fee_rate
+                cash_t1 += proceeds - fee
+                shares[code] -= sell_shares
+            else:
+                buy_mv = diff_mv
+                buy_shares = buy_mv / (open_next * (1 + cfg.slippage))
+                cost = buy_shares * open_next * (1 + cfg.slippage)
+                fee = cost * cfg.fee_rate
+                total_cost = cost + fee
+                if total_cost > cash_t1:
+                    scale = cash_t1 / total_cost
+                    buy_shares *= scale
+                    cost = buy_shares * open_next * (1 + cfg.slippage)
+                    fee = cost * cfg.fee_rate
+                    total_cost = cost + fee
+                cash_t1 -= total_cost
+                shares[code] += buy_shares
+
+        cash = cash_t1
+
+        mv_t1 = 0.0
+        for code in codes:
+            dfp = price_panel[code]
+            if t_next not in dfp.index:
+                continue
+            close_t1 = dfp.at[t_next, "close"]
+            mv_t1 += shares[code] * close_t1
+        equity_t1 = cash + mv_t1
+
+        records.append(
+            {
+                "date": t_next,
+                "equity": equity_t1,
+                "cash": cash,
+                "market_value": mv_t1,
+            }
+        )
+
+    eq = pd.DataFrame(records).set_index("date")
+    eq["ret"] = eq["equity"].pct_change().fillna(0.0)
+    return eq

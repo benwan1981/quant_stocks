@@ -13,7 +13,7 @@ from universe.universe_loader import scan_universe_from_dir
 from universe.sector_mapping import build_sector_mapping_stub, load_sector_mapping
 
 
-DATA_DIR = "./data/gm_HS300_equity"   # 股票池目录
+DATA_DIR = "./data/gm_a_index"   # 股票池目录
 
 
 def main():

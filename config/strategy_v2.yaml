@@ -1,0 +1,33 @@
+LOOKBACK:
+  MOM_SHORT: 10
+  MOM_LONG: 60
+  VOL: 60
+
+REGIMES:
+  risk_on:
+    buy_th: 0.60
+    sell_th: 0.30
+    base_target: 0.95
+    max_positions: 14
+  neutral:
+    buy_th: 0.57
+    sell_th: 0.32
+    base_target: 0.65
+    max_positions: 10
+  risk_off:
+    buy_th: 0.00
+    sell_th: -0.20
+    base_target: 0.25
+    max_positions: 6
+
+VOL:
+  a: 0.35
+  k1: 0.08
+  k2: 0.08
+
+DD_GATE:
+  start_dd: -0.05
+  end_dd: -0.15
+
+KELLY:
+  lambda: 0.45
