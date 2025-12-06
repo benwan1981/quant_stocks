@@ -706,7 +706,25 @@ def main():
                         end=end_ts.strftime("%Y-%m-%d"),
                         exec_cfg=exec_cfg,
                     )
+                    #-----------------打印过程-----------------------#
+                    strat_cfg = StrategyConfigV2.from_yaml(strat_path)
 
+                    st.markdown("#### 当前生效的策略参数快照")
+                    st.json(
+                        {
+                            "策略文件": str(strat_path),
+                            "factor_weights": strat_cfg.factor_weights,
+                            "buy_base": strat_cfg.buy_base,
+                            "sell_base": strat_cfg.sell_base,
+                            "target_exp_base": strat_cfg.target_exp_base,
+                        }
+                    )
+
+                    exec_cfg = load_execution_config(...)
+
+                    #-----------------打印过程-----------------------#
+
+                    
                     trades_df = engine_v2.trades_df if engine_v2.trades_df is not None else pd.DataFrame()
                     dbg_df = engine_v2.debug_df if engine_v2.debug_df is not None else pd.DataFrame()
 
