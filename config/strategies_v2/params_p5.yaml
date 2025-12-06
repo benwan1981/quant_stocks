@@ -1,0 +1,36 @@
+# === P5 · 宏观更敏感（美元 / 汇率加权） ===
+THRESHOLDS:
+  RISK_ON:
+    buy: 0.60
+    sell: 0.30
+    base_target: 0.90
+    max_pos: 14
+  NEUTRAL:
+    buy: 0.58
+    sell: 0.32
+    base_target: 0.60
+    max_pos: 10
+  RISK_OFF:
+    buy: 0.00
+    sell: -0.20
+    base_target: 0.20
+    max_pos: 6
+
+VOL_ADAPT:
+  k_buy: 0.08
+  k_sell: 0.08
+  a_target: 0.35
+
+KELLY_LITE:
+  lambda: 0.40
+
+RISK_GATE:
+  dd_start: -0.05
+  dd_zero: -0.15
+
+GROUP_CAP:
+  MAX_GROUP_WEIGHT: 0.40
+
+HYSTERESIS_BAND:
+  extra_buy: 0.00
+  extra_sell: 0.00

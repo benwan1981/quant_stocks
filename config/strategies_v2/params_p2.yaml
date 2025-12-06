@@ -1,0 +1,36 @@
+# === P2 · 均衡基准（默认首选） ===
+THRESHOLDS:
+  RISK_ON:
+    buy: 0.60
+    sell: 0.30
+    base_target: 0.95
+    max_pos: 14
+  NEUTRAL:
+    buy: 0.57
+    sell: 0.32
+    base_target: 0.65
+    max_pos: 10
+  RISK_OFF:
+    buy: 0.00
+    sell: -0.20
+    base_target: 0.25
+    max_pos: 6
+
+VOL_ADAPT:
+  k_buy: 0.08
+  k_sell: 0.08
+  a_target: 0.35
+
+KELLY_LITE:
+  lambda: 0.45
+
+RISK_GATE:
+  dd_start: -0.05
+  dd_zero: -0.15
+
+GROUP_CAP:
+  MAX_GROUP_WEIGHT: 0.40
+
+HYSTERESIS_BAND:
+  extra_buy: 0.00
+  extra_sell: 0.00

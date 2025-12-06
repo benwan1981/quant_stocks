@@ -1,0 +1,36 @@
+# === P6 · 宽股票池 / 行业限额更强（分散化） ===
+THRESHOLDS:
+  RISK_ON:
+    buy: 0.59
+    sell: 0.31
+    base_target: 0.95
+    max_pos: 22
+  NEUTRAL:
+    buy: 0.57
+    sell: 0.33
+    base_target: 0.70
+    max_pos: 16
+  RISK_OFF:
+    buy: 0.00
+    sell: -0.20
+    base_target: 0.30
+    max_pos: 8
+
+VOL_ADAPT:
+  k_buy: 0.10
+  k_sell: 0.10
+  a_target: 0.35
+
+KELLY_LITE:
+  lambda: 0.45
+
+RISK_GATE:
+  dd_start: -0.05
+  dd_zero: -0.15
+
+GROUP_CAP:
+  MAX_GROUP_WEIGHT: 0.28
+
+HYSTERESIS_BAND:
+  extra_buy: 0.00
+  extra_sell: 0.00

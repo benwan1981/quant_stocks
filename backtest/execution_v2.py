@@ -8,17 +8,46 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass,fields
 from typing import Dict
 
 import pandas as pd
 
+# backtest/execution_v2.py 顶部
+from pathlib import Path
+from typing import Any, Dict
+
+import yaml  # 需要 pip install pyyaml（你项目里如果已有就不用管）
 
 @dataclass
 class ExecutionConfig:
+    # 这里以你现在 engine_v2 真正用到的字段为准
     initial_cash: float = 1_000_000.0
     fee_rate: float = 0.0005
     slippage: float = 0.0005
+    min_fee: float = 5.0
+    stamp_duty: float = 0.001
+    lot_size: int = 100
+    # 如果你后来在 __init__ 里真的加了别的字段，比如：
+    # min_fee: float = 5.0
+    # stamp_duty: float = 0.001
+    # lot_size: int = 100
+    # 就一并写在这里
+
+    @classmethod
+    def from_yaml(cls, path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+
+            valid_keys = {f.name for f in fields(cls)}
+            filtered = {k: v for k, v in data.items() if k in valid_keys}
+
+            return cls(**filtered)
+
+        except Exception as e:
+            print(f"加载执行配置 {path} 失败，使用默认参数。错误: {e}")
+            return cls()
 
 
 def run_execution_t1_equal_weight(

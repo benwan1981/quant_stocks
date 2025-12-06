@@ -1,33 +1,54 @@
-LOOKBACK:
-  MOM_SHORT: 10
-  MOM_LONG: 60
-  VOL: 60
+# config/strategy_v2.yaml
+# 组合动态因子策略 V2 · 均衡基准（默认）
 
-REGIMES:
-  risk_on:
-    buy_th: 0.60
-    sell_th: 0.30
-    base_target: 0.95
-    max_positions: 14
-  neutral:
-    buy_th: 0.57
-    sell_th: 0.32
+factor_weights:
+  mom_short: 0.60      # 短期动量权重
+  mom_long: 0.30       # 中长期动量权重
+  vol: 0.10            # 波动/放量相关因子权重
+  residual_mom: 0.20   # 残差动量（如启用的话）
+
+thresholds:
+  RISK_ON:
+    buy: 0.60          # 风险偏多时 买入阈值
+    sell: 0.30         # 风险偏多时 卖出阈值
+    base_target: 0.95  # 风险偏多时 基础目标仓位
+    max_pos: 14        # 风险偏多时 最大持仓只数
+  NEUTRAL:
+    buy: 0.57
+    sell: 0.32
     base_target: 0.65
-    max_positions: 10
-  risk_off:
-    buy_th: 0.00
-    sell_th: -0.20
+    max_pos: 10
+  RISK_OFF:
+    buy: 0.00
+    sell: -0.20
     base_target: 0.25
-    max_positions: 6
+    max_pos: 6
 
-VOL:
-  a: 0.35
-  k1: 0.08
-  k2: 0.08
+vol_adapt:
+  k_buy: 0.08          # 波动高时，对买入阈值的调节强度
+  k_sell: 0.08         # 波动高时，对卖出阈值的调节强度
+  a_target: 0.35       # 仓位随波动缩放的敏感度
 
-DD_GATE:
-  start_dd: -0.05
-  end_dd: -0.15
+hysteresis:
+  extra_buy: 0.00      # 买入滞回（>0 提高买入门槛）
+  extra_sell: 0.00     # 卖出滞回（>0 提高卖出门槛）
 
-KELLY:
-  lambda: 0.45
+kelly:
+  lambda: 0.45         # Kelly-lite 缩放参数，越大越激进
+
+risk_gate:
+  dd_start: -0.05      # 回撤从 -5% 开始削减仓位
+  dd_zero: -0.15       # 回撤到 -15% 时仓位打到 0
+
+group_cap:
+  max_group_weight: 0.40  # 单行业/单主题最大权重
+
+lookback:
+  short: 10            # 短期动量窗口
+  long: 60             # 长期动量窗口
+  vol: 60              # 波动率窗口
+
+enable:
+  residual_mom: true   # 是否启用残差动量因子
+  macro_adjust: false  # 是否启用宏观调整（美元/汇率等）
+  breadth: false       # 是否启用内部宽度指标（涨跌家数等）

@@ -1,0 +1,36 @@
+# === P4 · 低换手 / 成本友好（慢变量为主） ===
+THRESHOLDS:
+  RISK_ON:
+    buy: 0.64
+    sell: 0.26
+    base_target: 0.85
+    max_pos: 12
+  NEUTRAL:
+    buy: 0.62
+    sell: 0.28
+    base_target: 0.60
+    max_pos: 9
+  RISK_OFF:
+    buy: 0.00
+    sell: -0.15
+    base_target: 0.25
+    max_pos: 6
+
+VOL_ADAPT:
+  k_buy: 0.04
+  k_sell: 0.04
+  a_target: 0.40
+
+KELLY_LITE:
+  lambda: 0.35
+
+RISK_GATE:
+  dd_start: -0.05
+  dd_zero: -0.15
+
+GROUP_CAP:
+  MAX_GROUP_WEIGHT: 0.35
+
+HYSTERESIS_BAND:
+  extra_buy: 0.01
+  extra_sell: 0.01

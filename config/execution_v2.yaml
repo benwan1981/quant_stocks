@@ -1,0 +1,5 @@
+# config/execution_v2.yaml
+
+initial_cash: 1000000    # 初始资金
+fee_rate: 0.0005         # 单向手续费（含券商佣金等）
+slippage: 0.0005         # 单向滑点假设

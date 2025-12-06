@@ -1,0 +1,36 @@
+# === P3 · 趋势进攻（顺势强 / 追涨快） ===
+THRESHOLDS:
+  RISK_ON:
+    buy: 0.56
+    sell: 0.28
+    base_target: 1.00
+    max_pos: 18
+  NEUTRAL:
+    buy: 0.55
+    sell: 0.30
+    base_target: 0.75
+    max_pos: 12
+  RISK_OFF:
+    buy: 0.00
+    sell: -0.25
+    base_target: 0.30
+    max_pos: 6
+
+VOL_ADAPT:
+  k_buy: 0.12
+  k_sell: 0.06
+  a_target: 0.25
+
+KELLY_LITE:
+  lambda: 0.55
+
+RISK_GATE:
+  dd_start: -0.06
+  dd_zero: -0.18
+
+GROUP_CAP:
+  MAX_GROUP_WEIGHT: 0.45
+
+HYSTERESIS_BAND:
+  extra_buy: -0.02
+  extra_sell: 0.02

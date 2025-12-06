@@ -1,0 +1,36 @@
+# === P1 · 稳健保守（回撤优先） ===
+THRESHOLDS:
+  RISK_ON:
+    buy: 0.62
+    sell: 0.32
+    base_target: 0.80
+    max_pos: 10
+  NEUTRAL:
+    buy: 0.60
+    sell: 0.34
+    base_target: 0.55
+    max_pos: 8
+  RISK_OFF:
+    buy: 0.00
+    sell: -0.15
+    base_target: 0.20
+    max_pos: 5
+
+VOL_ADAPT:
+  k_buy: 0.05
+  k_sell: 0.08
+  a_target: 0.50
+
+KELLY_LITE:
+  lambda: 0.35
+
+RISK_GATE:
+  dd_start: -0.04
+  dd_zero: -0.12
+
+GROUP_CAP:
+  MAX_GROUP_WEIGHT: 0.35
+
+HYSTERESIS_BAND:
+  extra_buy: 0.00
+  extra_sell: 0.00
