@@ -32,7 +32,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import font_manager, rcParams
 import streamlit as st
-import traceback
+import yaml
 import json
 
 from backtest.engine_v2 import BacktestEngineV2, StrategyConfigV2
@@ -600,7 +600,6 @@ def main():
     with tab2:
         st.markdown("### 组合动态因子策略（V2）")
 
-
         data_dir_v2 = ROOT_DIR / "data" / "gm_HS300_equity"
         st.write(f"数据目录：`{data_dir_v2}`")
 
@@ -612,7 +611,7 @@ def main():
             help="用于组合策略 V2 的回测时间窗口",
         )
 
-        # 股票数量上限（防止一次性全 A 股太慢）
+        # 股票数量上限
         max_stocks = st.number_input(
             "最多使用的股票数量（按代码排序取前 N 个）",
             min_value=10,
@@ -620,93 +619,43 @@ def main():
             value=300,
             step=10,
         )
-        # 策略文件目录：自动枚举 *.yaml
-        strategy_dir = ROOT_DIR / "config" / "strategies_v2"
-        strategy_dir.mkdir(parents=True, exist_ok=True)
 
-        strategy_files = sorted(strategy_dir.glob("*.yaml"))
-        if not strategy_files:
-            st.info(f"策略目录 {strategy_dir} 下暂时没有 .yaml 文件，将使用默认 config/strategy_v2.yaml")
-            strat_path = ROOT_DIR / "config" / "strategy_v2.yaml"
-        else:
-            strat_name_options = [p.name for p in strategy_files]
-            selected_strat_name = st.selectbox(
-                "选择策略参数文件（YAML）",
-                options=strat_name_options,
-                index=0,
-                help=f"来自目录：{strategy_dir}",
-            )
-            strat_path = strategy_dir / selected_strat_name
+        # === 策略参数文件选择（这里是真正使用 params_pX.yaml 的地方） ===
+        strat_dir = ROOT_DIR / "config" / "strategies_v2"
+        yaml_files = sorted(strat_dir.glob("*.yaml"))
 
+        if not yaml_files:
+            st.error(f"策略目录中未找到 YAML 文件: {strat_dir}")
+            st.stop()
+
+        yaml_names = [p.name for p in yaml_files]
+        selected_yaml = st.selectbox(
+            "选择策略参数文件（YAML）",
+            options=yaml_names,
+            index=0,
+        )
+        strat_path = strat_dir / selected_yaml
         st.write(f"当前使用的策略文件：`{strat_path}`")
 
         run_combo = st.button("🚀 运行组合策略 V2")
 
-
         if run_combo:
             with st.spinner("正在加载数据并运行组合回测（V2）..."):
                 try:
-                    # 1) 加载 universe：直接从 prices.parquet 拿列名
+                    # 1) universe
                     prices_all = pd.read_parquet(ROOT_DIR / "precomputed" / "prices.parquet")
                     all_codes = sorted(prices_all.columns.tolist())
                     universe_codes = all_codes[: int(max_stocks)]
                     st.write(f"本次使用股票数量：{len(universe_codes)}")
 
-                    # 2) 计算时间窗口
+                    # 2) 回测窗口
                     start_ts = None
                     end_ts = prices_all.index.max()
                     if window_label != "全部":
                         years = 1 if "1年" in window_label else 3 if "3年" in window_label else 5
                         start_ts = end_ts - pd.DateOffset(years=years)
 
-                    # === 这里修改：构造股票池时强制包含 000300 ===
-                    max_n = int(max_stocks)
-                    all_codes = sorted(prices_all.columns.tolist())
-
-                    universe_codes = all_codes[:max_n]
-
-                    # 如果 000300 在数据里，但不在当前截取的股票池中，就把它硬塞进去
-                    if "000300" in all_codes and "000300" not in universe_codes:
-                        if len(universe_codes) < max_n:
-                            universe_codes.append("000300")
-                        else:
-                            # 替换最后一个代码，保证总数量不变
-                            universe_codes[-1] = "000300"
-
-                    # 去重一下，防止上面 append/替换造成重复
-                    universe_codes = list(dict.fromkeys(universe_codes))
-
-                    st.write(
-                        f"本次使用股票数量：{len(universe_codes)}，"
-                        f"{'已包含 000300 作为指数/状态基准' if '000300' in universe_codes else '注意：未找到 000300'}"
-                    )
-
-                    # 3) 加载策略配置 & 执行配置
-                    strat_path = ROOT_DIR / "config" / "strategy_v2.yaml"
-                    try:
-                        strat_cfg = StrategyConfigV2.from_yaml(strat_path)
-                    except Exception as e:
-                        st.error(f"加载策略配置 {strat_path} 失败：{e}")
-                        st.stop()
-
-                    exec_cfg_path = ROOT_DIR / "config" / "execution_v2.yaml"
-                    try:
-                        exec_cfg = ExecutionConfig.from_yaml(exec_cfg_path)
-                    except Exception as e:
-                        st.warning(f"加载执行配置 {exec_cfg_path} 失败，使用代码内默认参数。错误: {e}")
-                        exec_cfg = ExecutionConfig()
-
-                    # 4) 运行引擎
-                    engine_v2 = BacktestEngineV2(
-                        strat_cfg=strat_cfg,
-                        universe_codes=universe_codes,
-                    )
-                    eq = engine_v2.run_backtest(
-                        start=None if start_ts is None else start_ts.strftime("%Y-%m-%d"),
-                        end=end_ts.strftime("%Y-%m-%d"),
-                        exec_cfg=exec_cfg,
-                    )
-                    #-----------------打印过程-----------------------#
+                    # 3) === 从“选中的 YAML”加载策略配置（关键修改） ===
                     strat_cfg = StrategyConfigV2.from_yaml(strat_path)
 
                     st.markdown("#### 当前生效的策略参数快照")
@@ -720,11 +669,20 @@ def main():
                         }
                     )
 
-                    exec_cfg = load_execution_config(...)
+                    # 4) 执行参数（先用默认，下面第二步会再讲 YAML 版）
+                    exec_cfg = ExecutionConfig()
 
-                    #-----------------打印过程-----------------------#
+                    # 5) 运行引擎
+                    engine_v2 = BacktestEngineV2(
+                        strat_cfg=strat_cfg,
+                        universe_codes=universe_codes,
+                    )
+                    eq = engine_v2.run_backtest(
+                        start=None if start_ts is None else start_ts.strftime("%Y-%m-%d"),
+                        end=end_ts.strftime("%Y-%m-%d"),
+                        exec_cfg=exec_cfg,
+                    )
 
-                    
                     trades_df = engine_v2.trades_df if engine_v2.trades_df is not None else pd.DataFrame()
                     dbg_df = engine_v2.debug_df if engine_v2.debug_df is not None else pd.DataFrame()
 
