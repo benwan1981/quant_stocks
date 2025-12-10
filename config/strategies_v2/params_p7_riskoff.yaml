@@ -1,0 +1,41 @@
+# config/strategies_v2/params_p7tgest.yaml
+WEIGHTS:           # 注意这里是 WEIGHTS（大写），from_yaml 会同时查 WEIGHTS/weights
+  mom10: 0.4
+  mom60: 0.4
+  vol60: 0.2
+
+THRESHOLDS:        # 这里也是大写，里面有 RISK_ON / NEUTRAL / RISK_OFF
+  RISK_ON:
+    buy: 0.1
+    sell: 0.30
+    base_target: 0.1
+
+  NEUTRAL:
+    buy: 0.57
+    sell: 0.32
+    base_target: 0.65
+
+  RISK_OFF:
+    buy: 0.00
+    sell: -0.20
+    base_target: 0.25
+
+# 下面这些暂时不会被引擎用到，但可以先保留，将来扩展
+VOL_ADAPT:
+  k_buy: 0.08
+  k_sell: 0.08
+  a_target: 0.35
+
+KELLY_LITE:
+  lambda: 0.45
+
+RISK_GATE:
+  dd_start: -0.05
+  dd_zero: -0.15
+
+GROUP_CAP:
+  MAX_GROUP_WEIGHT: 0.40
+
+HYSTERESIS_BAND:
+  extra_buy: 0.00
+  extra_sell: 0.00

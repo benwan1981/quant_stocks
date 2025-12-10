@@ -1,18 +1,17 @@
 # backtest/engine_v2.py
 # -*- coding: utf-8 -*-
 """
-简化版组合动态因子回测引擎（使用预计算因子 + Numba 核心）：
+简化版组合动态因子回测引擎（使用预计算因子，先纯 Python 版本）：
 
 - 从 precomputed/*.parquet 读取 prices / factors / regime
-- 根据 strategy_v2.yaml 组合打分
+- 根据 strategy_v2.yaml / params_px.yaml 组合打分
 - 根据 base_regime / z_sigma 给出 buy/sell/target_exp（简化版）
-- 调用 engine_numba_core.backtest_core 做回测
+- 使用纯 Python 回测核心 backtest_core_py（后续可无缝换成 Numba 版本）
 - 返回 equity_df，并构建 trades_df（基于持仓变动还原）
-
-后续你可以在此基础上，逐步往原来伪代码 A 的完整版靠拢。
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -21,7 +20,9 @@ import numpy as np
 import pandas as pd
 import yaml
 
-#   from .engine_numba_core import backtest_core
+# 若后面要切换为 Numba 核心，再按需打开这一行
+# from .engine_numba_core import backtest_core
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PRE_DIR = ROOT_DIR / "precomputed"
@@ -31,18 +32,21 @@ REG_DIR = PRE_DIR / "regime"
 
 # ------------------- 配置结构 -------------------
 
-@dataclass
+
 @dataclass
 class StrategyConfigV2:
     factor_weights: Dict[str, float]
     buy_base: float
     sell_base: float
     target_exp_base: float
+    # 新增：按档位保存阈值，键是 "RISK_ON" / "NEUTRAL" / "RISK_OFF"
+    thresholds_by_regime: Dict[str, Dict[str, float]] | None = None
 
     @classmethod
     def from_yaml(cls, path: Path) -> "StrategyConfigV2":
         """
-        兼容两类写法：
+        兼容多种写法的策略 YAML：
+
         1）简单版：
             weights:
               mom10: 0.4
@@ -53,52 +57,129 @@ class StrategyConfigV2:
               sell: 0.30
               target_exp: 0.95
 
-        2）你之前给的 P1~P6 结构：
+        2）P1~P7 版（大写 + regime 分档）：
+            WEIGHTS:
+              mom10: 0.4
+              mom60: 0.4
+              vol60: 0.2
+
             THRESHOLDS:
               RISK_ON:
                 buy: 0.60
                 sell: 0.30
                 base_target: 0.95
-              ...
 
-        这里简化为只用 RISK_ON 这块做“基础参数”。
+              NEUTRAL:
+                buy: 0.57
+                sell: 0.32
+                base_target: 0.65
+
+              RISK_OFF:
+                buy: 0.00
+                sell: -0.20
+                base_target: 0.25
         """
         with open(path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+            raw = yaml.safe_load(f) or {}
 
-        # 兼容大小写的 weights
-        w = cfg.get("weights") or cfg.get("WEIGHTS") or {}
+        # 顶层 key 做一层“大小写不敏感”
+        cfg = {str(k).lower(): v for k, v in raw.items()}
 
-        # 如果没写 weights，就给一个默认组合（后续可以在 yaml 里自己调）
-        if not w:
-            w = {
+        # ===== 因子权重 =====
+        w_block = (
+            cfg.get("weights")
+            or cfg.get("factors")
+            or cfg.get("w")
+            or {}
+        )
+
+        factor_weights: Dict[str, float] = {}
+        if isinstance(w_block, dict):
+            for k, v in w_block.items():
+                try:
+                    factor_weights[str(k)] = float(v)
+                except Exception:
+                    continue
+
+        if not factor_weights:
+            factor_weights = {
                 "mom10": 0.4,
                 "mom60": 0.4,
                 "vol60": 0.2,
             }
 
-        # 兼容大小写的 thresholds
-        th_raw = cfg.get("thresholds") or cfg.get("THRESHOLDS") or {}
+        # ===== 阈值块 =====
+        th_block = cfg.get("thresholds") or cfg.get("th") or {}
 
-        # 如果是 P1~P6 那种结构，里面有 RISK_ON/NEUTRAL/RISK_OFF
-        if isinstance(th_raw, dict) and "RISK_ON" in th_raw:
-            th = th_raw["RISK_ON"]
-            buy = th.get("buy", 0.60)
-            sell = th.get("sell", 0.30)
-            # 你 P1~P6 里用的是 base_target，这里映射到 target_exp_base
-            target_exp = th.get("base_target", 0.95)
+        thresholds_by_regime: Dict[str, Dict[str, float]] | None = None
+        buy_val = 0.60
+        sell_val = 0.30
+        target_val = 0.95
+
+        if isinstance(th_block, dict):
+            # 先看是不是分档结构（RISK_ON / NEUTRAL / RISK_OFF）
+            upper_keys = {str(k).upper(): k for k in th_block.keys()}
+            has_regimes = any(k in upper_keys for k in ("RISK_ON", "NEUTRAL", "RISK_OFF"))
+
+            if has_regimes:
+                thresholds_by_regime = {}
+
+                for regime_up in ("RISK_ON", "NEUTRAL", "RISK_OFF"):
+                    if regime_up not in upper_keys:
+                        continue
+                    orig_key = upper_keys[regime_up]
+                    block = th_block.get(orig_key) or {}
+                    if not isinstance(block, dict):
+                        continue
+
+                    r_buy = float(block.get("buy", 0.60))
+                    r_sell = float(block.get("sell", 0.30))
+                    r_target = float(
+                        block.get("target_exp", block.get("base_target", 0.95))
+                    )
+                    thresholds_by_regime[regime_up] = {
+                        "buy": r_buy,
+                        "sell": r_sell,
+                        "target": r_target,
+                    }
+
+                # 选一个“默认档位”作为 buy_base/sell_base/target_exp_base
+                default_regime_up = None
+                for candidate in ("NEUTRAL", "RISK_ON", "RISK_OFF"):
+                    if thresholds_by_regime and candidate in thresholds_by_regime:
+                        default_regime_up = candidate
+                        break
+
+                if thresholds_by_regime and default_regime_up is not None:
+                    base = thresholds_by_regime[default_regime_up]
+                    buy_val = base["buy"]
+                    sell_val = base["sell"]
+                    target_val = base["target"]
+                else:
+                    # 理论上不会走到这里，但防御一下
+                    buy_val, sell_val, target_val = 0.60, 0.30, 0.95
+
+            else:
+                # 扁平结构：thresholds 里直接 buy/sell/target_exp
+                buy_val = float(th_block.get("buy", 0.60))
+                sell_val = float(th_block.get("sell", 0.30))
+                target_val = float(
+                    th_block.get("target_exp", th_block.get("base_target", 0.95))
+                )
+                thresholds_by_regime = None
         else:
-            # 扁平结构
-            buy = th_raw.get("buy", 0.60)
-            sell = th_raw.get("sell", 0.30)
-            target_exp = th_raw.get("target_exp", 0.95)
+            # thresholds 不是 dict，就走默认
+            buy_val, sell_val, target_val = 0.60, 0.30, 0.95
+            thresholds_by_regime = None
 
         return cls(
-            factor_weights={str(k): float(v) for k, v in w.items()},
-            buy_base=float(buy),
-            sell_base=float(sell),
-            target_exp_base=float(target_exp),
+            factor_weights=factor_weights,
+            buy_base=buy_val,
+            sell_base=sell_val,
+            target_exp_base=target_val,
+            thresholds_by_regime=thresholds_by_regime,
         )
+
 
 
 @dataclass
@@ -121,52 +202,45 @@ class RegimeConfig:
 
     如果暂时不用这些功能，保持默认值即可，不会影响回测结果。
     """
-    # 预计算好的 regime 文件所在目录（通常是 ROOT_DIR / "precomputed" / "regime"）
+
     regime_dir: str | Path | None = None
-
-    # 基础市场状态文件名，例如 "base_regime.parquet"
     base_regime_file: str = "base_regime.parquet"
-
-    # 波动 z-score 文件名，例如 "z_sigma.parquet"
     z_sigma_file: str = "z_sigma.parquet"
-
-    # 是否启用 regime 调整（不用可以关掉）
     enable_regime_adjust: bool = True
-
-    # z_sigma 的阈值（只是示例，loader 用得到就有字段）
     bull_z: float = -0.5
     bear_z: float = 0.5
 
-# ------------------- 引擎主体 -------------------
+
+# ------------------- 纯 Python 回测核心 -------------------
+
 
 def backtest_core_py(
     prices: np.ndarray,
     scores: np.ndarray,
     buy_th: np.ndarray,
-    sell_th: np.ndarray,
+    sell_th: np.ndarray,   # 当前简化版暂时没用到
     target_exp: np.ndarray,
     fee_rate: float,
     initial_cash: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    纯 Python 版组合回测核心（先跑通逻辑，后续再考虑 Numba/GPU）.
+    纯 Python 版组合回测核心（先跑通逻辑，后续再考虑 Numba/GPU）。
 
     参数:
-        prices:    (T, N) 收盘价矩阵
-        scores:    (T, N) 0-1 之间的打分（横截面 rank 后）
-        buy_th:    (T,)   每日买入阈值
-        sell_th:   (T,)   每日卖出阈值（当前简化版暂时没用到，可扩展）
-        target_exp:(T,)   每日组合目标仓位（0~1）
-        fee_rate:  手续费费率
+        prices:     (T, N) 收盘价矩阵
+        scores:     (T, N) 0-1 之间的打分（横截面 rank 后）
+        buy_th:     (T,)   每日买入阈值
+        sell_th:    (T,)   每日卖出阈值（当前没用，可扩展）
+        target_exp: (T,)   每日组合目标仓位（0~1）
+        fee_rate:   手续费费率
         initial_cash: 初始现金
 
     返回:
-        equity: (T,)  每日总权益
-        cash:   (T,)  每日现金
+        equity: (T,) 每日总权益
+        cash:   (T,) 每日现金
         pos:    (T, N) 每日持仓股数
     """
     T, N = prices.shape
-
     equity = np.zeros(T, dtype=np.float64)
     cash = np.zeros(T, dtype=np.float64)
     pos = np.zeros((T, N), dtype=np.float64)
@@ -181,9 +255,9 @@ def backtest_core_py(
 
     for t in range(1, T):
         p = prices[t].copy()
-
-        # 若当天价格有 NaN，用前一日价格顶一下，避免 0 价/NaN 影响
         prev_p = prices[t - 1]
+
+        # 若当天价格 NaN/非正，用前一日价格顶一下，避免 0 价/NaN 影响
         for j in range(N):
             if not np.isfinite(p[j]) or p[j] <= 0:
                 p[j] = prev_p[j]
@@ -192,7 +266,7 @@ def backtest_core_py(
         port_val = float(np.nansum(pos_cur * p))
         eq_before = cash_cur + port_val
         if eq_before <= 0:
-            eq_before = 1e-9  # 防止除零
+            eq_before = 1e-9
 
         # 决定今日要持有哪些股票：score >= buy_th[t] 的，等权分配 target_exp[t]
         long_mask = scores[t] >= buy_th[t]
@@ -216,11 +290,9 @@ def backtest_core_py(
             if sell_amt > 0:
                 fee_sell = sell_amt * fee_rate
                 cash_cur += sell_amt - fee_sell
-                # pos_cur += trade_value / p （trade_value 为负）
                 for j in range(N):
-                    if sell_mask[j]:
-                        if p[j] > 0:
-                            pos_cur[j] += trade_value[j] / p[j]
+                    if sell_mask[j] and p[j] > 0:
+                        pos_cur[j] += trade_value[j] / p[j]  # trade_value[j] 为负
 
         # 再买入（受当前现金约束）
         buy_mask = trade_value > 0
@@ -230,15 +302,16 @@ def backtest_core_py(
                 # 考虑手续费的缩放
                 scale = min(1.0, cash_cur / (buy_amt_plan * (1.0 + fee_rate)))
                 if scale > 0:
-                    buy_value = trade_value * 0.0
+                    buy_value = np.zeros(N, dtype=np.float64)
                     for j in range(N):
                         if buy_mask[j]:
                             buy_value[j] = trade_value[j] * scale
+
                     buy_amt_real = float(buy_value[buy_mask].sum())
                     fee_buy = buy_amt_real * fee_rate
                     cost = buy_amt_real + fee_buy
                     cash_cur -= cost
-                    # 增加持仓
+
                     for j in range(N):
                         if buy_mask[j] and p[j] > 0:
                             pos_cur[j] += buy_value[j] / p[j]
@@ -252,6 +325,9 @@ def backtest_core_py(
         pos[t, :] = pos_cur
 
     return equity, cash, pos
+
+
+# ------------------- 引擎主体 -------------------
 
 
 class BacktestEngineV2:
@@ -272,6 +348,13 @@ class BacktestEngineV2:
         self.trades_df: Optional[pd.DataFrame] = None
         self.debug_df: Optional[pd.DataFrame] = None
 
+        # 用于后续导出组合快照 / 复盘
+        self._pos_arr: Optional[np.ndarray] = None   # (T, N) 每日持仓股数
+        self._price_arr: Optional[np.ndarray] = None # (T, N) 收盘价矩阵
+        self._dates: Optional[pd.DatetimeIndex] = None
+        self._codes: Optional[list[str]] = None
+
+
     # ---------- 数据加载 ----------
 
     def _load_prices_and_factors(
@@ -289,7 +372,7 @@ class BacktestEngineV2:
             use_codes = [c for c in self.universe_codes if c in prices.columns]
             prices = prices[use_codes]
 
-        # 加载因子
+        # 加载因子（目前先支持 mom10 / mom60 / vol60）
         factors: Dict[str, pd.DataFrame] = {}
         for fname in ["mom10", "mom60", "vol60"]:
             p = FAC_DIR / f"{fname}.parquet"
@@ -307,11 +390,9 @@ class BacktestEngineV2:
         return prices, factors
 
     def _load_regime(self, index_like: pd.Index) -> Tuple[pd.Series, pd.Series]:
-        # 读取并对齐 base_regime
+        # base_regime
         br = pd.read_parquet(REG_DIR / "base_regime.parquet").reindex(index_like)
-        # 兼容不同 pandas 版本：单列 DataFrame -> Series
         if isinstance(br, pd.DataFrame):
-            # 尝试取名为 'base_regime' 的列，否则取第一列
             if "base_regime" in br.columns:
                 base_regime = br["base_regime"]
             else:
@@ -319,7 +400,7 @@ class BacktestEngineV2:
         else:
             base_regime = br
 
-        # 同理处理 z_sigma
+        # z_sigma
         zs = pd.read_parquet(REG_DIR / "z_sigma.parquet").reindex(index_like)
         if isinstance(zs, pd.DataFrame):
             if "z_sigma" in zs.columns:
@@ -329,14 +410,12 @@ class BacktestEngineV2:
         else:
             z_sigma = zs
 
-        # 缺失值处理：用前值填充，剩余空补默认
         base_regime = base_regime.ffill().fillna("neutral")
         z_sigma = z_sigma.ffill().fillna(0.0)
 
         return base_regime, z_sigma
 
-
-    # ---------- 核心：构造 Numba 输入 & 调用 ------------
+    # ---------- 核心：构造输入 & 调用回测核心 ------------
 
     def run_backtest(
         self,
@@ -354,7 +433,7 @@ class BacktestEngineV2:
         start_ts = pd.to_datetime(start) if start else None
         end_ts = pd.to_datetime(end) if end else None
 
-        # 2) 加载价格 & 因子
+        # 2) 加载价格 & 因子 & regime
         prices, factors = self._load_prices_and_factors(start_ts, end_ts)
         base_regime, z_sigma = self._load_regime(prices.index)
 
@@ -369,32 +448,49 @@ class BacktestEngineV2:
         # 4) 横截面 0-1 排名，增强稳健性
         score_rank = score_df.rank(axis=1, pct=True)
 
-        # 5) 按市场状态生成基础买卖阈值 & 目标仓位
+                # 5) 按市场状态生成基础买卖阈值 & 目标仓位
         n = len(prices)
         buy_th = np.full(n, self.strat_cfg.buy_base, dtype=np.float64)
         sell_th = np.full(n, self.strat_cfg.sell_base, dtype=np.float64)
         target_exp = np.full(n, self.strat_cfg.target_exp_base, dtype=np.float64)
 
-        # base_regime 是一个 Series，逐日调整
-        for i, reg in enumerate(base_regime.values):
-            if reg == "bull":
-                buy_th[i] = self.strat_cfg.buy_base - 0.05
-                sell_th[i] = self.strat_cfg.sell_base + 0.02
-                target_exp[i] = min(1.0, self.strat_cfg.target_exp_base * 1.1)
-            elif reg == "bear":
-                buy_th[i] = self.strat_cfg.buy_base + 0.05
-                sell_th[i] = self.strat_cfg.sell_base + 0.05
-                target_exp[i] = max(0.2, self.strat_cfg.target_exp_base * 0.5)
+        th_by_regime = self.strat_cfg.thresholds_by_regime
 
-        # 简单的波动自适应：z_sigma 高时降低目标仓位
+        if th_by_regime:
+            # 有分档配置：根据 base_regime -> RISK_ON / NEUTRAL / RISK_OFF
+            for i, reg in enumerate(base_regime.values):
+                if reg == "bull":
+                    regime_up = "RISK_ON"
+                elif reg == "bear":
+                    regime_up = "RISK_OFF"
+                else:
+                    regime_up = "NEUTRAL"
+
+                block = th_by_regime.get(regime_up) or {}
+                buy_th[i] = float(block.get("buy", self.strat_cfg.buy_base))
+                sell_th[i] = float(block.get("sell", self.strat_cfg.sell_base))
+                target_exp[i] = float(block.get("target", self.strat_cfg.target_exp_base))
+        else:
+            # 没有分档配置，退回到旧逻辑：根据 bull/bear 做简单偏移
+            for i, reg in enumerate(base_regime.values):
+                if reg == "bull":
+                    buy_th[i] = self.strat_cfg.buy_base - 0.05
+                    sell_th[i] = self.strat_cfg.sell_base + 0.02
+                    target_exp[i] = min(1.0, self.strat_cfg.target_exp_base * 1.1)
+                elif reg == "bear":
+                    buy_th[i] = self.strat_cfg.buy_base + 0.05
+                    sell_th[i] = self.strat_cfg.sell_base + 0.05
+                    target_exp[i] = max(0.2, self.strat_cfg.target_exp_base * 0.5)
+
+        # 6) 简单的波动自适应：z_sigma 高时降低目标仓位
         z_arr = z_sigma.to_numpy()
         target_exp = target_exp * (1.0 / (1.0 + 0.3 * np.maximum(z_arr, 0.0)))
         target_exp = np.clip(target_exp, 0.0, 1.0)
 
-        # 每天符合“打分 >= 买入阈值”的股票数量，用于排查是否一直没人可买
+        # 7) 每天符合“打分 >= 买入阈值”的股票数量（方便 debug 是否一直没人可买）
         long_counts = (score_rank.values >= buy_th[:, None]).sum(axis=1)
 
-        # 核心输入（纯 Python 版）
+        # 8) 调用纯 Python 回测核心
         price_arr = prices.to_numpy(dtype=np.float64)
         score_arr = score_rank.to_numpy(dtype=np.float64)
         buy_arr = buy_th.astype(np.float64)
@@ -410,41 +506,6 @@ class BacktestEngineV2:
             float(exec_cfg.fee_rate),
             float(exec_cfg.initial_cash),
         )
-
-
-        # 8) 调用 Numba 核心
-        # 关键点：**只能用位置参数，不能再出现 prices= 这种关键字**
-        #
-        # 假设 engine_numba_core.backtest_core 的定义类似：
-        #   backtest_core(prices, scores, buy_th, sell_th, target_exp, fee_rate, initial_cash)
-        #
-        '''     equity_arr, cash_arr, pos_arr = backtest_core(
-                price_arr,              # prices
-                score_arr,              # scores
-                buy_arr,                # buy_th
-                sell_arr,               # sell_th
-                target_arr,             # target_exp
-                exec_cfg.fee_rate,      # fee_rate
-                exec_cfg.initial_cash,  # initial_cash
-            )'''
-        
-                # Numba 核心输入 —— 现在先使用纯 Python 版本 backtest_core_py
-        price_arr = prices.to_numpy(dtype=np.float64)
-        score_arr = score_rank.to_numpy(dtype=np.float64)
-        buy_arr = buy_th.astype(np.float64)
-        sell_arr = sell_th.astype(np.float64)
-        target_arr = target_exp.astype(np.float64)
-
-        equity_arr, cash_arr, pos_arr = backtest_core_py(
-            price_arr,
-            score_arr,
-            buy_arr,
-            sell_arr,
-            target_arr,
-            float(exec_cfg.fee_rate),
-            float(exec_cfg.initial_cash),
-        )
-
 
         # 9) 构造 equity_df
         eq = pd.DataFrame(
@@ -474,9 +535,10 @@ class BacktestEngineV2:
         )
 
         # 12) 交易明细：通过 pos_arr 差分近似还原
-        trades: list[tuple] = []
+        trades: List[Tuple] = []
         dates = prices.index.to_list()
         codes = prices.columns.to_list()
+
         for t in range(1, len(dates)):
             dt = dates[t]
             for j, code in enumerate(codes):
@@ -499,4 +561,90 @@ class BacktestEngineV2:
             columns=["date", "action", "code", "shares", "price"],
         )
 
+        # 保存内部状态，方便后续导出 1天 / 1周 / 1月 组合结果
+        self._pos_arr = pos_arr
+        self._price_arr = price_arr
+        self._dates = prices.index
+        self._codes = list(prices.columns)
+
         return eq
+
+
+    def export_portfolio_snapshots(self, freq: str = "D") -> pd.DataFrame:
+        """
+        导出不同频率的组合快照，基于最近一次 run_backtest 的结果。
+
+        参数
+        ----
+        freq : {"D", "W", "M"}
+            "D" - 每日快照
+            "W" - 每周最后一个交易日快照
+            "M" - 每月最后一个交易日快照
+
+        返回
+        ----
+        DataFrame，列包含：
+            - date   : 日期
+            - code   : 股票代码
+            - shares : 持仓股数
+            - value  : 该股票市值
+            - weight : 在当日组合中的权重（按市值算）
+        """
+        if self._pos_arr is None or self._price_arr is None:
+            raise RuntimeError("请先调用 run_backtest()，再导出组合快照。")
+
+        dates = self._dates
+        codes = self._codes
+        pos_arr = self._pos_arr
+        price_arr = self._price_arr
+
+        # 1) 选择要导出的时间点
+        if freq == "D":
+            idx_list = list(range(len(dates)))
+        else:
+            # 构造一个辅助序列，用于 resample 找每周/每月最后一个索引
+            ser = pd.Series(np.arange(len(dates)), index=dates)
+            if freq == "W":
+                # 按周取最后一个交易日，使用周五为锚点
+                idx_ser = ser.resample("W-FRI").last()
+            elif freq == "M":
+                # 每月最后一个交易日
+                idx_ser = ser.resample("M").last()
+            else:
+                raise ValueError(f"不支持的 freq: {freq}，请使用 'D'/'W'/'M'。")
+            idx_list = [int(i) for i in idx_ser.dropna().to_list()]
+
+        records = []
+        for t in idx_list:
+            dt = dates[t]
+            shares_t = pos_arr[t]
+            prices_t = price_arr[t]
+            values_t = shares_t * prices_t
+            total_val = float(np.nansum(values_t))
+
+            # 若当日组合总市值为 0（空仓），则 weight 全为 0
+            if total_val <= 0:
+                weights_t = np.zeros_like(values_t)
+            else:
+                weights_t = values_t / total_val
+
+            for j, code in enumerate(codes):
+                sh = float(shares_t[j])
+                if sh == 0 and total_val == 0:
+                    # 完全空仓时，可以选择跳过所有记录；这里还是输出，方便看“空仓日”
+                    pass
+
+                records.append(
+                    {
+                        "date": dt,
+                        "code": code,
+                        "shares": sh,
+                        "value": float(values_t[j]),
+                        "weight": float(weights_t[j]),
+                    }
+                )
+
+        df_snap = pd.DataFrame(records)
+        # 可以按日期+权重排序，方便查看
+        df_snap = df_snap.sort_values(["date", "weight"], ascending=[True, False])
+        return df_snap

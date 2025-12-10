@@ -798,6 +798,26 @@ def main():
                     )
                     st.success(f"本次回测结果已保存到：{run_dir}")
 
+
+    with st.expander("📂 导出组合快照（1天 / 1周 / 1月）", expanded=False):
+        freq_opt = st.selectbox("频率", ["D-每日", "W-每周", "M-每月"])
+        if st.button("导出快照表"):
+            freq_map = {"D-每日": "D", "W-每周": "W", "M-每月": "M"}
+            freq = freq_map[freq_opt]
+            snap_df = engine_v2.export_portfolio_snapshots(freq=freq)
+            st.dataframe(snap_df.head(50))
+
+            # 也可以提供下载
+            csv_bytes = snap_df.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                label="下载 CSV",
+                data=csv_bytes,
+                file_name=f"portfolio_snapshots_{freq}.csv",
+                mime="text/csv",
+            )
+
+
+
 if __name__ == "__main__":
     main()
 
